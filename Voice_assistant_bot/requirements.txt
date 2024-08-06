@@ -1,0 +1,6 @@
+aiogram
+aiofiles
+aiohttp
+openai[async]
+pydantic
+async_openai
