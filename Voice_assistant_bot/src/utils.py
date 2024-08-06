@@ -23,7 +23,6 @@ class EventHandler(AssistantEventHandler):
     @override
     async def on_text_created(self, text) -> None:
         try:
-            print("1")
             buffer.append(f"\n{text}")
         except Exception as e:
             logging.error(f"Ошибка в on_text_created: {e}")
@@ -31,7 +30,6 @@ class EventHandler(AssistantEventHandler):
     @override
     async def on_text_delta(self, delta, snapshot):
         try:
-            print("2")
             buffer.append(delta.value)
         except Exception as e:
             logging.error(f"Ошибка в on_text_delta: {e}")
@@ -63,7 +61,6 @@ thread = None
 
 # Инициализация ассистента
 async def assistant_initialization():
-    print("1")
     
     global assistant, thread
     
@@ -149,9 +146,6 @@ async def get_ai_response(text: str) -> str:
         if run.status == 'completed': 
             # Получение списка сообщений
             messages = await client.beta.threads.messages.list(thread_id=thread.id)
-            
-            # Печать для отладки
-            print(messages)
             
             # Извлечение значений из сообщений
             assistants_response = [
