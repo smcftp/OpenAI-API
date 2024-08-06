@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str
 
     class Config:
-        env_file = 'D:\Programming\Python\GPT\Voice_AI_bot_on_Aiogram\Voice_assistant_bot\.env'
+        env_file = ''
 
 set = Settings()
 
