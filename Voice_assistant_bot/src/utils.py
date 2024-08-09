@@ -99,8 +99,7 @@ async def get_ai_response(text: str, user_id, chat_id) -> str:
         )   
         print(run.status)    
 
-        if run.status != 'completed': 
-            print("Вызов функции")
+        if run.status == 'requires_action': 
             # Define the list to store tool outputs
             tool_outputs = []
             
@@ -164,15 +163,39 @@ async def get_ai_response(text: str, user_id, chat_id) -> str:
                     messages = await client.beta.threads.messages.list(
                         thread_id=thread.id
                     )
-                    assistants_response = messages.data[0].content[0].text.value
-                    return assistants_response
+                    # assistants_response = messages.data[0].content[0].text.value
+                    assistants_response = messages.data[0].content[0].text
+                    
+                    annotations = assistants_response.annotations
+                    citations = []
+                    for index, annotation in enumerate(annotations):
+                        assistants_response.value = assistants_response.value.replace(annotation.text, f"[{index}]")
+                        if file_citation := getattr(annotation, "file_citation", None):
+                            cited_file = await client.files.retrieve(file_citation.file_id)
+                            citations.append(f"[{index}] {cited_file.filename}")
+                    combined_output = f"{assistants_response.value}\n\n" + "\n".join(citations)
+                    return combined_output
                 else:
                     print(run.status)
-        else:    
+                    
+        elif run.status == 'completed':   
             # Получение списка сообщений
             messages = await client.beta.threads.messages.list(thread_id=thread.id)
-            assistants_response = messages.data[0].content[0].text.value
-            return assistants_response
+            # assistants_response = messages.data[0].content[0].text.value
+            assistants_response = messages.data[0].content[0].text
+            
+            annotations = assistants_response.annotations
+            citations = []
+            for index, annotation in enumerate(annotations):
+                assistants_response.value = assistants_response.value.replace(annotation.text, f"[{index}]")
+                if file_citation := getattr(annotation, "file_citation", None):
+                    cited_file = await client.files.retrieve(file_citation.file_id)
+                    citations.append(f"[{index}] {cited_file.filename}")
+            combined_output = f"{assistants_response.value}\n\n" + "\n".join(citations)
+            return combined_output
+        else:
+            raise Exception("Run status is not 'completed' and requires further investigation.")
+            
     except Exception as e:
         logging.error(f"Ошибка при получении ответа от AI: {e}")
         return "Ошибка при получении ответа от AI."
@@ -209,14 +232,42 @@ async def send_voice_message(chat_id: int, voice_path: str):
 
 # Проверка ценности
 async def validate_value(value: str) -> bool:
-    completion = await client.chat.completions.create(
-    model="gpt-4o",
-    messages=[
-        {"role": "system", "content": "You are an assistant in analyzing messages for the presence of certain elements in them."},
-        {"role": "user", "content": "Does the user's next message contain their personal opinion or values important? Message: {}. In your answer,  only True if it is and False if it is not.".format(value)}
+    
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_delivery_date",
+                "description": "Сhecking user expression. Сhecking if the expression contains a user their personal opinion or values important.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "proof_of_value": {
+                            "type": "boolean",
+                            "description": "True if it contain personal opinion or important values and False if it is not",
+                        },
+                    },
+                    "required": ["proof_of_value"],
+                    "additionalProperties": False,
+                },
+            }
+        }
     ]
+    
+    completion = await client.chat.completions.create(
+        model="gpt-4o",
+        messages = [
+            {"role": "system", "content": "You are a helpful customer support assistant. Use the supplied tools to assist the user."},
+            {"role": "user", "content": "{}".format(value)}
+        ],
+        tools=tools,
     )
-    return bool(completion.choices[0].message.content)
+    
+    if completion.choices[0].finish_reason == 'stop':
+        return False
+    elif completion.choices[0].finish_reason == 'tool_calls':
+        print(completion)
+        return bool(json.loads(completion.choices[0].message.tool_calls[0].function.arguments)["proof_of_value"])
 
 # Сохранение ценности в БД
 # Настройка логгера
