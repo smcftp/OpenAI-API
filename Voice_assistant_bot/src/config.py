@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     amplitude_api_key: str
 
     class Config:
-        env_file = 'D:\Programming\Python\GPT\Voice_AI_bot_on_Aiogram\Voice_assistant_bot_2\.env'
+        env_file = 'Voice_assistant_bot_2\.env'
 
 set = Settings()
 
@@ -84,11 +84,11 @@ assistant = client.beta.assistants.update(
 
 # Upload the user provided file to OpenAI
 message_file_0 = client.files.create(
-    file = open("C:\\Users\\thatn\\Desktop\\At_Latoken.docx", "rb"), purpose="assistants"
+    file = open("At_Latoken.docx", "rb"), purpose="assistants"
 )
 
 message_file_1 = client.files.create(
-    file = open("C:\\Users\\thatn\\Desktop\\Anxiety.docx", "rb"), purpose="assistants"
+    file = open("Anxiety.docx", "rb"), purpose="assistants"
 )
     
 # Create a thread and attach the file to the message
