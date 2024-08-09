@@ -1,14 +1,25 @@
 import logging
 import tempfile
 import os
+import json
 from typing import Optional
+
 from aiofiles import open as aio_open
 from aiohttp import ClientSession
 from aiogram.types import FSInputFile
-from openai import AsyncOpenAI, AssistantEventHandler
+
+from openai import AsyncOpenAI
+
+from amplitude import Amplitude, BaseEvent
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+
 from typing_extensions import override
-from config import set
-from config import bot_tg
+
+from config import set, bot_tg, thread, assistant, executor
+from models import User, UserValue
+from database import SessionLocal
 
 client = AsyncOpenAI(
     api_key=set.openai_api_key
@@ -16,63 +27,7 @@ client = AsyncOpenAI(
 
 TOKEN = set.telegram_bot_token
 
-buffer = []
-
-# Класс обработчик событий
-class EventHandler(AssistantEventHandler):
-    @override
-    async def on_text_created(self, text) -> None:
-        try:
-            buffer.append(f"\n{text}")
-        except Exception as e:
-            logging.error(f"Ошибка в on_text_created: {e}")
-
-    @override
-    async def on_text_delta(self, delta, snapshot):
-        try:
-            buffer.append(delta.value)
-        except Exception as e:
-            logging.error(f"Ошибка в on_text_delta: {e}")
-
-    @override
-    async def on_tool_call_created(self, tool_call):
-        try:
-            buffer.append(f"\n{tool_call.type}\n")
-        except Exception as e:
-            logging.error(f"Ошибка в on_tool_call_created: {e}")
-
-    @override
-    async def on_tool_call_delta(self, delta, snapshot):
-        try:
-            print("3")
-            if delta.type == 'code_interpreter':
-                if delta.code_interpreter.input:
-                    buffer.append(delta.code_interpreter.input)
-                if delta.code_interpreter.outputs:
-                    buffer.append(f"\n\noutput >")
-                    for output in delta.code_interpreter.outputs:
-                        if output.type == "logs":
-                            buffer.append(f"\n{output.logs}")
-        except Exception as e:
-            logging.error(f"Ошибка в on_tool_call_delta: {e}")
-
-assistant = None
-thread = None
-
-# Инициализация ассистента
-async def assistant_initialization():
-    
-    global assistant, thread
-    
-    # Ассистент
-    assistant = await client.beta.assistants.create(
-            name="Professional interlocutor",
-            instructions="You are a professional interlocutor. You need to answer questions, ask your own and maintain dialogue as much as possible.",
-            tools=[{"type": "code_interpreter"}],
-            model="gpt-4o",
-        )
-
-    thread = await client.beta.threads.create()
+amp_client = Amplitude(api_key=set.amplitude_api_key)
     
 # Получение файла по ID
 async def get_file_path(file_id: str) -> Optional[str]:
@@ -127,7 +82,7 @@ async def convert_voice_to_text(file_id: str) -> str:
             os.remove(temp_file_path)
 
 # Взаимодействие с ассистентом  
-async def get_ai_response(text: str) -> str:
+async def get_ai_response(text: str, user_id, chat_id) -> str:
     try:
         # Создание сообщения пользователя
         message = await client.beta.threads.messages.create(
@@ -141,25 +96,83 @@ async def get_ai_response(text: str) -> str:
             thread_id=thread.id,
             assistant_id=assistant.id,
             instructions="Please address the user as Jane Doe. The user has a premium account."
-        )       
+        )   
+        print(run.status)    
 
-        if run.status == 'completed': 
+        if run.status != 'completed': 
+            print("Вызов функции")
+            # Define the list to store tool outputs
+            tool_outputs = []
+            
+            # Loop through each tool in the required action section
+            for tool in run.required_action.submit_tool_outputs.tool_calls:
+                if tool.function.name == "save_value":
+                    print("Ценность определена")
+                    # Получение данных из ответа функции
+                    try:
+                        json_string = str(tool.function)
+                        start_index = json_string.find('{')
+                        end_index = json_string.rfind('}')
+                        if start_index != -1 and end_index != -1 and end_index > start_index:
+                            extracted_text = json_string[start_index + 1:end_index]
+                        json_data = json.loads('{' + extracted_text + '}')
+                        opinions = json_data['opinions']
+                        values = json_data['values']
+                        
+                        # Сохранение ценности в БД
+                        validation_result = await validate_value(opinions)
+                        # telegram_id = "jjj"
+                        if validation_result == True:
+                            print("Ценность подтверждена")
+                            
+                            # Отправка сообщения в amplitude
+                            event_type = "ValueAnalysis"
+                            event = {
+                                "keywords": ["value", "analysis"],
+                                "likes": True
+                            }
+                            
+                            # Сохранение значений в БД
+                            # await save_user_value(telegram_id, values)
+                        
+                    except json.JSONDecodeError as e:
+                        print(f"Error decoding function date: {e}")
+
+                    except KeyError as e:
+                        print(f"KeyError: {e}. Function date does not contain expected keys.")
+                
+                tool_outputs.append({
+                    "tool_call_id": tool.id,
+                    "output": "Хорошо я запомнил ваше предпочтение, что это ваша ценность."
+                }) 
+                
+                # Submit all tool outputs at once after collecting them in a list
+                if tool_outputs:
+                    try:
+                        run = await client.beta.threads.runs.submit_tool_outputs_and_poll(
+                        thread_id=thread.id,
+                        run_id=run.id,
+                        tool_outputs=tool_outputs
+                        )
+                        print("Tool outputs submitted successfully.")
+                    except Exception as e:
+                        print("Failed to submit tool outputs:", e)
+                else:
+                    print("No tool outputs to submit.")
+                
+                if run.status == 'completed':
+                    messages = await client.beta.threads.messages.list(
+                        thread_id=thread.id
+                    )
+                    assistants_response = messages.data[0].content[0].text.value
+                    return assistants_response
+                else:
+                    print(run.status)
+        else:    
             # Получение списка сообщений
             messages = await client.beta.threads.messages.list(thread_id=thread.id)
-            
-            # Извлечение значений из сообщений
-            assistants_response = [
-                message.content[0].text.value 
-                for message in messages.data
-                if message.content
-            ]
-        else:
-            print(run.status)
-        
-        # Объединение всех строк в одну
-        combined_response = " ".join(assistants_response)
-        
-        return combined_response
+            assistants_response = messages.data[0].content[0].text.value
+            return assistants_response
     except Exception as e:
         logging.error(f"Ошибка при получении ответа от AI: {e}")
         return "Ошибка при получении ответа от AI."
@@ -193,3 +206,82 @@ async def send_voice_message(chat_id: int, voice_path: str):
     finally:
         if os.path.exists(voice_path):
             os.remove(voice_path)
+
+# Проверка ценности
+async def validate_value(value: str) -> bool:
+    completion = await client.chat.completions.create(
+    model="gpt-4o",
+    messages=[
+        {"role": "system", "content": "You are an assistant in analyzing messages for the presence of certain elements in them."},
+        {"role": "user", "content": "Does the user's next message contain their personal opinion or values important? Message: {}. In your answer,  only True if it is and False if it is not.".format(value)}
+    ]
+    )
+    return bool(completion.choices[0].message.content)
+
+# Сохранение ценности в БД
+# Настройка логгера
+# logging.basicConfig(level=logging.DEBUG)
+# logger = logging.getLogger(__name__)
+
+# async def save_user_value(telegram_id: int, value: str):
+#     logger.debug(f"Сохранение ценности для telegram_id={telegram_id}, value={value}")
+#     try:
+#         async with SessionLocal() as session:
+#             async with session.begin():
+#                 logger.debug("Начало транзакции")
+#                 user = await session.execute(select(User).filter_by(telegram_id=telegram_id))
+#                 user = user.scalars().first()
+#                 if not user:
+#                     logger.debug("Пользователь не найден, создается новый пользователь")
+#                     user = User(telegram_id=telegram_id)
+#                     session.add(user)
+#                     await session.commit()
+#                 logger.debug("Добавление новой ценности")
+#                 user_value = UserValue(user_id=user.id, value=value)
+#                 session.add(user_value)
+#                 await session.commit()
+#                 logger.debug("Ценность успешно сохранена")
+#     except Exception as e:
+#         logger.error(f"Ошибка при сохранении ценности для telegram_id={telegram_id}: {str(e)}")
+#         raise
+
+# Aнализ эмоций на полученом фото
+async def analyze_photo(file_path):
+    photo_url = f"https://api.telegram.org/file/bot{TOKEN}/{file_path}"
+    
+    response = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "You need to determine whether there is a human face in the photo. If there is, then determine the emotions that the person is experiencing; if there is no face or it is impossible to determine the emotions, return only word False."},
+                {
+                "type": "image_url",
+                "image_url": {
+                    "url": photo_url,
+                },
+                },
+            ],
+            }
+        ],
+        max_tokens=300,
+    )
+    
+    return response.choices[0].message.content
+
+# Функция для отправки событий в Amplitude
+def send_event_to_amplitude(user_id, chat_id, event_type, event_properties):
+    try:
+        # Create a BaseEvent instance
+        event = BaseEvent(event_type=event_type, user_id=user_id, device_id=chat_id)
+        
+        # # Set event properties if provided
+        # if event_properties:
+        #     event["event_properties"] = event_properties
+        
+        # Отправляем событие в Amplitude
+        amp_client.track(event)
+        print(f"Событие типа '{event_type}' для пользователя {user_id} отправлено в Amplitude")
+    except Exception as e:
+        print(f"Ошибка при отправке события в Amplitude: {e}")
