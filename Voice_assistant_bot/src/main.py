@@ -1,13 +1,10 @@
 import asyncio
 import logging
 import sys
-from aiogram import Dispatcher
 from config import bot_tg
-from handlers import register_handlers1
+from handlers import register_handlers1, dp
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', stream=sys.stdout)
-
-dp = Dispatcher()
 
 def main() -> None:
     try:
