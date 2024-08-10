@@ -6,6 +6,7 @@ from config import set
 DATABASE_URL = set.database_url
 print("DATABASE_URL = ", DATABASE_URL)
 
+# Создаем асинхронный движок и сессию
 engine: AsyncEngine = create_async_engine(DATABASE_URL, echo=True)
 SessionLocal = sessionmaker(
     autocommit=False,
