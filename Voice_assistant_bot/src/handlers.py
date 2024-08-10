@@ -6,7 +6,7 @@ from aiogram.types import Message
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 
-from utils import convert_voice_to_text, get_ai_response, convert_text_to_voice, send_voice_message, analyze_photo, send_event_to_amplitude
+from src.utils import convert_voice_to_text, get_ai_response, convert_text_to_voice, send_voice_message, analyze_photo, send_event_to_amplitude, save_user_value
 from config import bot_tg, set, executor
 
 dp = Dispatcher()
@@ -18,7 +18,6 @@ class Form(StatesGroup):
 async def command_start_handler(message: Message, state: FSMContext) -> None:
     await message.answer(f"Приветствую тебя {message.from_user.first_name}!\nДавай познакомимся! Можешь задать любой свой вопрос, я тебе помогу! \nЯ могу:\n1) Общаться на любую тему на разных языках. \n2) Принимать голосовые и текстовые сообщения. \n3) Анализировать по фото, какие эмоции испытывает человек.")
     await state.set_state(Form.waiting_for_message)
-    # await assistant_initialization()
 
 # Обработка голосовых сообщений
 @dp.message(F.voice)
@@ -36,7 +35,7 @@ async def handle_voice_message(message: Message, state: FSMContext):
         
         file_id = message.voice.file_id
         text = await convert_voice_to_text(file_id)
-        assistants_response = await get_ai_response(text, user_id, chat_id)
+        assistants_response = await get_ai_response(text, user_id)
         voice_path = await convert_text_to_voice(assistants_response)
         if voice_path:
             await send_voice_message(message.chat.id, voice_path)
@@ -61,7 +60,7 @@ async def handle_text_message(message: Message, state: FSMContext) -> None:
         executor.submit(send_event_to_amplitude, user_id, chat_id, event_type, event)
         
         text = message.text
-        assistants_response = await get_ai_response(text, user_id, chat_id)
+        assistants_response = await get_ai_response(text, user_id)
         # await message.answer(assistants_response)
         voice_path = await convert_text_to_voice(assistants_response)
         if voice_path:
@@ -112,8 +111,17 @@ async def handle_image_message(message: Message, state: FSMContext) -> None:
         logging.error(f"Ошибка в обработчике голосовых сообщений: {e}")
         await message.answer("Произошла ошибка при обработке вашего сообщения.")
 
+@dp.message(Command('db'))
+async def command_db_save(message: Message, state: FSMContext) -> None:
+    
+    telegram_id = message.from_user.id
+    value = 'Любовь к птицам'
+    
+    save_user_value(telegram_id, value)
+    
 def register_handlers1(dp: Dispatcher) -> None:
     dp.message.register(command_start_handler, CommandStart())
     dp.message.register(handle_voice_message, lambda message: message.voice is not None)
     dp.message.register(handle_text_message, lambda message: message.text is not None)
     dp.message.register(handle_image_message, lambda message: message.photo is not None)
+    dp.message.register(command_db_save, lambda message: message.text is not None)
