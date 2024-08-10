@@ -1,18 +1,11 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey
-from sqlalchemy.orm import relationship
-from database import Base
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Integer, String, Text
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(String, unique=True, index=True)
-    values = relationship("UserValue", back_populates="owner")
+from src.database import Base
 
 class UserValue(Base):
     __tablename__ = "user_values"
 
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey('users.id'))
-    value = Column(Text, nullable=False)
-    owner = relationship("User", back_populates="values")
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    telegram_id: Mapped[str] = mapped_column(String, unique=True, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
