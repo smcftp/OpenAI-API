@@ -14,12 +14,13 @@ from amplitude import Amplitude, BaseEvent
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy.exc import IntegrityError
 
 from typing_extensions import override
 
 from config import set, bot_tg, thread, assistant, executor
-from models import User, UserValue
-from database import SessionLocal
+from src.models import User, UserValue
+from src.database import SessionLocal, engine, Base
 
 client = AsyncOpenAI(
     api_key=set.openai_api_key
@@ -82,7 +83,7 @@ async def convert_voice_to_text(file_id: str) -> str:
             os.remove(temp_file_path)
 
 # Взаимодействие с ассистентом  
-async def get_ai_response(text: str, user_id, chat_id) -> str:
+async def get_ai_response(text: str, user_id) -> str:
     try:
         # Создание сообщения пользователя
         message = await client.beta.threads.messages.create(
@@ -120,7 +121,7 @@ async def get_ai_response(text: str, user_id, chat_id) -> str:
                         
                         # Сохранение ценности в БД
                         validation_result = await validate_value(opinions)
-                        # telegram_id = "jjj"
+                        telegram_id = str(user_id)
                         if validation_result == True:
                             print("Ценность подтверждена")
                             
@@ -131,8 +132,11 @@ async def get_ai_response(text: str, user_id, chat_id) -> str:
                                 "likes": True
                             }
                             
+                            # Закоменчено так как бот работает только с VPN, а БД не поддерживает
                             # Сохранение значений в БД
-                            # await save_user_value(telegram_id, values)
+                            # await create_tables()
+                            # Пример добавления данных
+                            # await add_user_value(telegram_id, values)
                         
                     except json.JSONDecodeError as e:
                         print(f"Error decoding function date: {e}")
@@ -269,32 +273,33 @@ async def validate_value(value: str) -> bool:
         print(completion)
         return bool(json.loads(completion.choices[0].message.tool_calls[0].function.arguments)["proof_of_value"])
 
-# Сохранение ценности в БД
-# Настройка логгера
-# logging.basicConfig(level=logging.DEBUG)
-# logger = logging.getLogger(__name__)
+# Сохранение ценности в БД 
+# Пример создания таблиц в базе данных
+async def create_tables():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
-# async def save_user_value(telegram_id: int, value: str):
-#     logger.debug(f"Сохранение ценности для telegram_id={telegram_id}, value={value}")
-#     try:
-#         async with SessionLocal() as session:
-#             async with session.begin():
-#                 logger.debug("Начало транзакции")
-#                 user = await session.execute(select(User).filter_by(telegram_id=telegram_id))
-#                 user = user.scalars().first()
-#                 if not user:
-#                     logger.debug("Пользователь не найден, создается новый пользователь")
-#                     user = User(telegram_id=telegram_id)
-#                     session.add(user)
-#                     await session.commit()
-#                 logger.debug("Добавление новой ценности")
-#                 user_value = UserValue(user_id=user.id, value=value)
-#                 session.add(user_value)
-#                 await session.commit()
-#                 logger.debug("Ценность успешно сохранена")
-#     except Exception as e:
-#         logger.error(f"Ошибка при сохранении ценности для telegram_id={telegram_id}: {str(e)}")
-#         raise
+# Добавление ценности
+async def add_user_value(telegram_id, value):
+    try:
+        async with SessionLocal() as session:
+            async with session.begin():
+                existing_record = await session.execute(
+                    select(UserValue).where(UserValue.telegram_id == telegram_id)
+                )
+                if existing_record.scalars().first():
+                    print(f"Record with telegram_id {telegram_id} already exists.")
+                else:
+                    new_value = UserValue(telegram_id=telegram_id, value=value)
+                    session.add(new_value)
+                    try:
+                        await session.commit()
+                    except IntegrityError:
+                        await session.rollback()
+                        print(f"Could not insert {telegram_id}: {value}")
+    except Exception as e:
+        logging.error(f"Ошибка при сохранении ценности для telegram_id={telegram_id}: {str(e)}")
+        raise
 
 # Aнализ эмоций на полученом фото
 async def analyze_photo(file_path):
